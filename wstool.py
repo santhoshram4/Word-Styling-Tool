@@ -22,52 +22,42 @@ def set_column_widths_22_78(table):
         for idx, width in enumerate(widths):
             row.cells[idx].width = width
 
-def create_page_number(run):
-    """Word dynamic page number field-ah inject pannum"""
-    fldSimple = OxmlElement('w:fldSimple')
-    fldSimple.set(qn('w:instr'), r'PAGE')
-    run._r.append(fldSimple)
+def clear_all_footers(doc):
+    for section in doc.sections:
+        footer = section.footer
+        for param in footer.paragraphs:
+            p_element = param._element
+            p_element.getparent().remove(p_element)
 
-def setup_footer(doc, citation_name="citation"):
+def add_styled_page_break(paragraph, page_num, citation_name):
     """
-    image_6327c0.png-la irukura maari running text-ah remove pannitu 
-    'Page X of citation' format-ah set pannum.
+    Input-la page break aagura idathula grey background oda 'Page X of [citation]' insert pannum.
     """
-    section = doc.sections[0]
-    footer = section.footer
+    new_p = paragraph.insert_paragraph_before()
     
-    # Pathaya footer paragraphs-ah remove panrom (running text delete aagum)
-    for p in footer.paragraphs:
-        p_element = p._element
-        p_element.getparent().remove(p_element)
-    
-    # Pudhu footer paragraph
-    new_para = footer.add_paragraph()
-    new_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    
-    # "Page " text
-    run = new_para.add_run("Page ")
+    # Grey Shading (Background color)
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:val'), 'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'), 'D9D9D9') 
+    new_p._element.get_or_add_pPr().append(shd)
+
+    # Paragraph properties for spacing
+    new_p.paragraph_format.space_before = Pt(6)
+    new_p.paragraph_format.space_after = Pt(6)
+
+    run = new_p.add_run(f"Page {page_num} of [{citation_name}]")
     run.font.name = 'Times New Roman'
     run.font.size = Pt(11)
-    run.font.color.rgb = RGBColor(0, 0, 128) # Blue color image-la irukura maari
-    
-    # Dynamic Page Number
-    page_run = new_para.add_run()
-    create_page_number(page_run)
-    page_run.font.name = 'Times New Roman'
-    page_run.font.size = Pt(11)
-    page_run.font.color.rgb = RGBColor(0, 0, 128)
-    
-    # " of [citation]" text
-    run_end = new_para.add_run(f" of {citation_name}")
-    run_end.font.name = 'Times New Roman'
-    run_end.font.size = Pt(11)
-    run_end.font.color.rgb = RGBColor(0, 0, 128)
+    run.font.color.rgb = RGBColor(0, 0, 128) # Blue text
 
 def apply_legal_template_final(doc):
+    clear_all_footers(doc)
+    
     paragraphs = list(doc.paragraphs)
     anchor_index = -1
     
+    # 1. Header/Front page cleaning
     for i, para in enumerate(paragraphs):
         clean_text = para.text.replace(" ", "").replace("-", "").upper()
         if any(kw in clean_text for kw in ["JUDGMENT", "INTRODUCTION", "BACKGROUND"]):
@@ -79,11 +69,12 @@ def apply_legal_template_final(doc):
             p = paragraphs[i]._element
             p.getparent().remove(p)
 
+    # 2. Add New Header
     header_para = doc.paragraphs[0].insert_paragraph_before()
     header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
     case_name = "Name of the case"
-    citation_text = "citation" # Intha citation text thaan footer-laiyu varum
+    citation_text = "citation_name" 
 
     run1 = header_para.add_run(case_name)
     run1.font.name = 'Times New Roman'
@@ -99,20 +90,43 @@ def apply_legal_template_final(doc):
     run2.font.bold = True
     run2.font.color.rgb = RGBColor(0, 0, 128)
 
-    # Footer-ah inga setup panrom
-    setup_footer(doc, citation_text)
-
+    # 3. Add Table
     table_obj = doc.add_table(rows=15, cols=2)
     remove_table_borders(table_obj)
     set_column_widths_22_78(table_obj) 
-    
     header_para._element.addnext(table_obj._element)
+
+    # 4. Page Numbering Logic (Detection focus)
+    current_page = 1
+    judgment_found = False
     
-    labels = [
-        "Reported in:", "Case No:", "Judgment Date(s):", "Hearing Date(s):",
-        "Marked as:", "Country:", "Jurisdiction:", "Division:", "Judge:",
-        "Bench:", "Parties:", "Appearance:", "Categories:", "Function:", "Relevant Legislation:"
-    ]
+    for p in doc.paragraphs:
+        # Check if this paragraph contains a page break marker from the input
+        # w:lastRenderedPageBreak is used when Word auto-calculates pages
+        has_break = False
+        if '\f' in p.text: # Manual break
+            has_break = True
+        elif p._element.xpath('.//w:br[@w:type="page"]'): # Explicit page break
+            has_break = True
+        elif p._element.xpath('.//w:lastRenderedPageBreak'): # Auto-generated break from Word
+            has_break = True
+
+        # First Page: Table-ku kila Judgment start-la
+        if not judgment_found and "JUDGMENT" in p.text.upper():
+            add_styled_page_break(p, current_page, citation_text)
+            current_page += 1
+            judgment_found = True
+            continue
+        
+        # Following Pages: Input-la enga break iruko anga
+        if has_break:
+            add_styled_page_break(p, current_page, citation_text)
+            current_page += 1
+
+    # Table Labels setup
+    labels = ["Reported in:", "Case No:", "Judgment Date(s):", "Hearing Date(s):",
+              "Marked as:", "Country:", "Jurisdiction:", "Division:", "Judge:",
+              "Bench:", "Parties:", "Appearance:", "Categories:", "Function:", "Relevant Legislation:"]
     
     for r, label in enumerate(labels):
         cell_left = table_obj.cell(r, 0)
@@ -157,7 +171,6 @@ def apply_checklist_rules(doc):
             text = run.text.replace("  ", " ")
             for pattern, replacement in replacements.items():
                 text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
-            
             text = re.sub(r'(\d+)\s?centimetres', r'\1cm', text)
             text = re.sub(r'(\d+)\s?kilograms', r'\1kg', text)
             text = re.sub(r'(\d+)\s?kilometers', r'\1km', text)
@@ -170,16 +183,15 @@ def process_batch():
     if not os.path.exists(output_dir): os.makedirs(output_dir)
 
     for filename in os.listdir(input_dir):
-        if filename.lower().endswith('.docx'):
+        if filename.lower().endswith('.docx') and not filename.startswith('~$'):
             print(f"Processing: {filename}")
             try:
                 doc = Document(os.path.join(input_dir, filename))
                 apply_legal_template_final(doc)
                 apply_checklist_rules(doc)
-                new_name = os.path.splitext(filename)[0] + ".docx"
-                doc.save(os.path.join(output_dir, new_name))
+                doc.save(os.path.join(output_dir, filename))
             except Exception as e:
-                print(f"Error: {e}")
+                print(f"Error processing {filename}: {e}")
 
 if __name__ == "__main__":
     process_batch()
