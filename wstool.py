@@ -7,7 +7,6 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 def remove_table_borders(table):
-    """Table borders-ai invisible aaki clean look tharum"""
     tbl = table._element
     tblPr = tbl.xpath('w:tblPr')[0]
     tblBorders = OxmlElement('w:tblBorders')
@@ -18,19 +17,57 @@ def remove_table_borders(table):
     tblPr.append(tblBorders)
 
 def set_column_widths_22_78(table):
-    """1st column 22% matrum 2nd column 78% width-ai set pannum"""
-    # Total available width ~6.5 inches
-    # 22% = 1.43 inches, 78% = 5.07 inches
     widths = [Inches(1.43), Inches(5.07)] 
     for row in table.rows:
         for idx, width in enumerate(widths):
             row.cells[idx].width = width
 
+def create_page_number(run):
+    """Word dynamic page number field-ah inject pannum"""
+    fldSimple = OxmlElement('w:fldSimple')
+    fldSimple.set(qn('w:instr'), r'PAGE')
+    run._r.append(fldSimple)
+
+def setup_footer(doc, citation_name="citation"):
+    """
+    image_6327c0.png-la irukura maari running text-ah remove pannitu 
+    'Page X of citation' format-ah set pannum.
+    """
+    section = doc.sections[0]
+    footer = section.footer
+    
+    # Pathaya footer paragraphs-ah remove panrom (running text delete aagum)
+    for p in footer.paragraphs:
+        p_element = p._element
+        p_element.getparent().remove(p_element)
+    
+    # Pudhu footer paragraph
+    new_para = footer.add_paragraph()
+    new_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    
+    # "Page " text
+    run = new_para.add_run("Page ")
+    run.font.name = 'Times New Roman'
+    run.font.size = Pt(11)
+    run.font.color.rgb = RGBColor(0, 0, 128) # Blue color image-la irukura maari
+    
+    # Dynamic Page Number
+    page_run = new_para.add_run()
+    create_page_number(page_run)
+    page_run.font.name = 'Times New Roman'
+    page_run.font.size = Pt(11)
+    page_run.font.color.rgb = RGBColor(0, 0, 128)
+    
+    # " of [citation]" text
+    run_end = new_para.add_run(f" of {citation_name}")
+    run_end.font.name = 'Times New Roman'
+    run_end.font.size = Pt(11)
+    run_end.font.color.rgb = RGBColor(0, 0, 128)
+
 def apply_legal_template_final(doc):
     paragraphs = list(doc.paragraphs)
     anchor_index = -1
     
-    # 1. JUDGMENT word search
     for i, para in enumerate(paragraphs):
         clean_text = para.text.replace(" ", "").replace("-", "").upper()
         if any(kw in clean_text for kw in ["JUDGMENT", "INTRODUCTION", "BACKGROUND"]):
@@ -42,11 +79,13 @@ def apply_legal_template_final(doc):
             p = paragraphs[i]._element
             p.getparent().remove(p)
 
-    # 2. Blue Header (Center Aligned, Size 14)
     header_para = doc.paragraphs[0].insert_paragraph_before()
     header_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
-    run1 = header_para.add_run("Name of the case")
+    case_name = "Name of the case"
+    citation_text = "citation" # Intha citation text thaan footer-laiyu varum
+
+    run1 = header_para.add_run(case_name)
     run1.font.name = 'Times New Roman'
     run1.font.size = Pt(14) 
     run1.font.bold = True
@@ -54,13 +93,15 @@ def apply_legal_template_final(doc):
     
     header_para.add_run().add_break() 
     
-    run2 = header_para.add_run("citation")
+    run2 = header_para.add_run(citation_text)
     run2.font.name = 'Times New Roman'
     run2.font.size = Pt(14)
     run2.font.bold = True
     run2.font.color.rgb = RGBColor(0, 0, 128)
 
-    # 3. 22/78 Ratio Table (No Borders)
+    # Footer-ah inga setup panrom
+    setup_footer(doc, citation_text)
+
     table_obj = doc.add_table(rows=15, cols=2)
     remove_table_borders(table_obj)
     set_column_widths_22_78(table_obj) 
@@ -74,7 +115,6 @@ def apply_legal_template_final(doc):
     ]
     
     for r, label in enumerate(labels):
-        # Left column (22% Width) - Bold
         cell_left = table_obj.cell(r, 0)
         p_l = cell_left.paragraphs[0]
         p_l.paragraph_format.space_after = Pt(4) 
@@ -83,7 +123,6 @@ def apply_legal_template_final(doc):
         rl.font.name = 'Times New Roman'
         rl.font.size = Pt(11) 
         
-        # Right column (78% Width)
         cell_right = table_obj.cell(r, 1)
         p_r = cell_right.paragraphs[0]
         p_r.paragraph_format.space_after = Pt(4)
@@ -98,7 +137,6 @@ def apply_legal_template_final(doc):
         rr.font.size = Pt(11)
 
 def apply_checklist_rules(doc):
-    # Overall text formatting rules
     for para in doc.paragraphs:
         if any(run.font.color.rgb == RGBColor(0, 0, 128) for run in para.runs):
             continue
@@ -133,12 +171,12 @@ def process_batch():
 
     for filename in os.listdir(input_dir):
         if filename.lower().endswith('.docx'):
-            print(f"Applying 22/78 Layout: {filename}")
+            print(f"Processing: {filename}")
             try:
                 doc = Document(os.path.join(input_dir, filename))
                 apply_legal_template_final(doc)
                 apply_checklist_rules(doc)
-                new_name = os.path.splitext(filename)[0] + ".doc"
+                new_name = os.path.splitext(filename)[0] + ".docx"
                 doc.save(os.path.join(output_dir, new_name))
             except Exception as e:
                 print(f"Error: {e}")
